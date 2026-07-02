@@ -16,6 +16,9 @@ class VenuesViewModel: ObservableObject {
     /// 可供选择的省份与城市地图 (Key: 省份, Value: 城市列表)
     @Published var provinceMap: [String: [String]] = [:]
     
+    /// 排序后的省份列表，避免在 View body 中频繁排序计算导致卡顿
+    @Published var sortedProvinces: [String] = []
+    
     /// 筛选条件：选择的城市或省份
     @Published var selectedRegion: String = "全部" {
         didSet { applyFilters() }
@@ -109,6 +112,7 @@ class VenuesViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.allVenues = decodedVenues
                     self.provinceMap = map
+                    self.sortedProvinces = Array(map.keys).sorted(by: <) // 缓存排序后的省份列表，避免在 UI 线程的 View body 中反复排序计算
                     self.applyFilters()
                     self.isLoading = false
                 }

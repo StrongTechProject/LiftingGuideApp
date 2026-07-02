@@ -10,9 +10,9 @@ struct VenuesView: View {
     @State private var position: MapCameraPosition = .automatic
     @State private var geocoder = CLGeocoder() // 持有长生命周期以防止异步回调时被释放导致崩溃
     
-    // 原生半屏列表抽屉状态
-    @State private var isListSheetPresented = true
-    @State private var activeDetent: PresentationDetent = .height(120)
+    // 自定义抽屉状态
+    @State private var isPanelExpanded = false
+    @State private var dragOffset: CGFloat = 0 // 使用 @State 从而能在松手动画中与 isPanelExpanded 同步归零，防止抽搐
     
     private let columns = [
         GridItem(.flexible(), spacing: 1),
@@ -20,46 +20,58 @@ struct VenuesView: View {
     ]
     
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // 1. 底层铺满的地图
-            Map(position: $position, selection: $selectedMapVenue) {
-                UserAnnotation()
-                
-                ForEach(viewModel.filteredVenues) { venue in
-                    if let lat = venue.lat, let lng = venue.lng {
-                        Annotation(venue.officialName ?? venue.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng)) {
-                            ZStack {
-                                Circle()
-                                    .fill(Theme.brandPrimary)
-                                    .frame(width: 30, height: 30)
-                                    .shadow(color: Theme.brandPrimary.opacity(0.4), radius: 3, x: 0, y: 1.5)
-                                
-                                Image(systemName: "dumbbell.fill")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 13, weight: .bold))
+        GeometryReader { geometry in
+            ZStack(alignment: .bottom) {
+                // 1. 底层铺满的地图
+                Map(position: $position, selection: $selectedMapVenue) {
+                    UserAnnotation()
+                    
+                    ForEach(viewModel.filteredVenues) { venue in
+                        if let lat = venue.lat, let lng = venue.lng {
+                            Annotation(venue.officialName ?? venue.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng)) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Theme.brandPrimary)
+                                        .frame(width: 30, height: 30)
+                                        .shadow(color: Theme.brandPrimary.opacity(0.4), radius: 3, x: 0, y: 1.5)
+                                    
+                                    Image(systemName: "dumbbell.fill")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 13, weight: .bold))
+                                }
                             }
+                            .tag(venue)
                         }
-                        .tag(venue)
                     }
                 }
+                .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+                .ignoresSafeArea()
+                
+                // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
+                VStack {
+                    LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
+                        .frame(height: 80)
+                        .ignoresSafeArea(edges: .top)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                
+                // 3. 自定义列表抽屉 (作为 TabBar 的外圈，底部悬浮于屏幕底边之上 12pt，与左右两边对齐)
+                VStack {
+                    Spacer()
+                    customDrawer(geometry: geometry)
+                        .padding(.bottom, 12)
+                }
+                .ignoresSafeArea(edges: .bottom)
             }
-            .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
-            .ignoresSafeArea()
-            
-            // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
-            VStack {
-                LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
-                    .frame(height: 80)
-                    .ignoresSafeArea(edges: .top)
-                Spacer()
-            }
-            .allowsHitTesting(false)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom) // 避免键盘弹出时压缩 GeometryReader 的安全高度，从而彻底解决由于抽屉尺寸重算与地图重排引起的点击卡顿
         .preferredColorScheme(.dark)
+        .toolbarBackground(.hidden, for: .tabBar) // 隐藏系统原生 TabBar 的毛玻璃背景，使其融入抽屉外圈
         .onAppear {
             viewModel.initialize()
         }
-        // 监听地图上大头针的点击
+        // 监听地图上大头针 of 点击
         .onChange(of: selectedMapVenue) { oldValue, newValue in
             if let venue = newValue {
                 selectedVenue = venue
@@ -74,19 +86,10 @@ struct VenuesView: View {
         .onChange(of: viewModel.selectedRegion) { oldValue, newValue in
             handleRegionChange(to: newValue)
         }
-        // 原生半屏列表抽屉
-        .sheet(isPresented: $isListSheetPresented) {
-            venuesListDrawer
-                .presentationDetents([.height(120), .medium, .large], selection: $activeDetent)
-                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                .interactiveDismissDisabled(true)
-                .presentationDragIndicator(.visible)
-                .presentationBackground(Theme.sheetBackground.opacity(0.95))
-        }
         // 场馆详情弹出页绑定在主体视图上
         .sheet(item: $selectedVenue) { venue in
             VenueDetailSheet(venue: venue)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.fraction(0.5), .large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -136,116 +139,182 @@ struct VenuesView: View {
         }
     }
     
-    // MARK: - 原生半屏列表抽屉内容
+    // MARK: - 自定义半屏列表抽屉内容
     
-    private var venuesListDrawer: some View {
-        VStack(spacing: 0) {
-            // A. 搜索及区域选择 (始终显示)
-            searchAndRegionRow
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+    private var drawerHeaderView: some View {
+        VStack(spacing: 8) {
+            // A. 顶部把手
+            Capsule()
+                .fill(Color.white.opacity(0.24))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
             
-            // B. 过滤器与数据列表 (当面板展开至 medium 或 large 时才渲染)
-            if activeDetent != .height(120) {
-                filterBar
-                    .padding(.vertical, 8)
-                    .transition(.opacity)
-                
-                Divider()
-                    .background(Color.white.opacity(0.1))
-                
-                if viewModel.isLoading {
-                    ProgressView("正在加载场馆数据...")
-                        .progressViewStyle(CircularProgressViewStyle(tint: Theme.brandPrimary))
-                        .foregroundColor(Theme.textPrimary)
-                        .frame(maxHeight: .infinity)
-                } else if viewModel.filteredVenues.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 32))
-                            .foregroundColor(Theme.textDim)
-                        Text("没有找到符合条件的场馆")
-                            .foregroundColor(Theme.textSecondary)
-                            .font(.subheadline)
+            // B. 地区选择与搜索条横排 (更加紧凑，取消探索场馆大标题)
+            HStack(spacing: 8) {
+                // 左侧地区选择器
+                Menu {
+                    RegionMenuView(viewModel: viewModel)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(viewModel.selectedRegion == "全部" ? "全部城市" : viewModel.selectedRegion)
+                            .font(.system(size: 13, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
                     }
-                    .frame(maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 1) {
-                            ForEach(viewModel.filteredVenues) { venue in
-                                VenueRowView(venue: venue, distanceText: viewModel.distanceString(for: venue))
-                                    .onTapGesture {
-                                        selectedVenue = venue
-                                    }
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
-                    .background(Color.clear)
+                    .foregroundColor(Theme.textStrong)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .glassEffect(.regular.interactive(), in: .capsule) // iOS 26 交互式液态玻璃质感
                 }
-            } else {
-                Spacer(minLength: 0)
+                
+                // 右侧搜索条
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(Theme.textSecondary)
+                        .font(.system(size: 13, weight: .bold))
+                    
+                    TextField("搜索场馆、器械、品牌...", text: $viewModel.searchQuery)
+                        .textFieldStyle(.plain)
+                        .foregroundColor(.white)
+                        .font(.system(size: 13))
+                        .autocorrectionDisabled()
+                    
+                    if !viewModel.searchQuery.isEmpty {
+                        Button(action: { viewModel.searchQuery = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .glassEffect(.regular.interactive(), in: .capsule) // iOS 26 交互式液态玻璃质感
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
         }
-        .preferredColorScheme(.dark)
     }
     
-    // MARK: - 内部子组件
-    
-    /// 搜索框与地区筛选器并排排列 of 圆角胶囊行
-    private var searchAndRegionRow: some View {
-        HStack(spacing: 10) {
-            // 1. 胶囊形状搜索框
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(Theme.textSecondary)
-                    .font(.system(size: 15, weight: .bold))
-                
-                TextField("搜索场馆、器械、品牌...", text: $viewModel.searchQuery)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(.white)
-                    .font(.system(size: 14))
-                    .autocorrectionDisabled()
-                
-                if !viewModel.searchQuery.isEmpty {
-                    Button(action: { viewModel.searchQuery = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(Theme.textSecondary)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 48)
-            .background(Color.white.opacity(0.08)) // 微透圆角胶囊
-            .clipShape(Capsule())
-            
-            // 2. 胶囊形状城市/地区筛选器
-            Menu {
-                Button("全部城市") { viewModel.selectedRegion = "全部" }
-                ForEach(Array(viewModel.provinceMap.keys).sorted(), id: \.self) { province in
-                    Menu(province) {
-                        Button("全部\(province)") { viewModel.selectedRegion = province }
-                        ForEach(viewModel.provinceMap[province] ?? [], id: \.self) { city in
-                            Button(city) { viewModel.selectedRegion = city }
+    private func customDrawer(geometry: GeometryProxy) -> some View {
+        let headerHeight: CGFloat = 72
+        // safeAreaInsets.bottom 在 TabView 内已包含 TabBar 高度 + Home Indicator
+        let tabBarTotalHeight = geometry.safeAreaInsets.bottom
+        
+        // 计算屏幕物理总高度（可用区域 + 顶部安全区 + 底部安全区）
+        let screenHeight = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+        // 展开时，由于抽屉底部有 12pt 的浮动边距，整个抽屉的高度应为屏幕高度一半减去 12pt，以保证顶部边缘依然精确对齐于屏幕中线
+        let targetTotalHeight = screenHeight * 0.5 - 12
+        let maxContentHeight = targetTotalHeight - headerHeight - tabBarTotalHeight
+        
+        let baseOffset: CGFloat = isPanelExpanded ? 0 : maxContentHeight
+        let rawOffset = baseOffset + dragOffset
+        // 限制拖拽偏移：向上最多拉出 24 点弹性空间，向下最多超出 40 点弹性空间
+        let currentOffset = max(-24, min(maxContentHeight + 40, rawOffset))
+        
+        // 当 currentOffset 变化时，计算可见高度用于淡入淡出（在展开/折叠最后 60 点内平滑过渡）
+        let visibleContentHeight = maxContentHeight - currentOffset
+        let contentOpacity = max(0.0, min(1.0, Double(visibleContentHeight / 60.0)))
+        
+        let totalHeight = headerHeight + maxContentHeight + tabBarTotalHeight
+        let visibleHeight = headerHeight + (maxContentHeight - currentOffset) + tabBarTotalHeight
+        
+        return VStack(spacing: 0) {
+            // A. 头部 (始终可见)
+            drawerHeaderView
+                .frame(height: headerHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(coordinateSpace: .global)
+                        .onChanged { value in
+                            // 实时同步手势位移
+                            dragOffset = value.translation.height
                         }
+                        .onEnded { value in
+                            let velocity = value.predictedEndLocation.y - value.location.y
+                            let translation = value.translation.height
+                            
+                            // 决定最终 snapping 目标
+                            let targetExpanded: Bool
+                            if translation < -50 || velocity < -100 {
+                                targetExpanded = true
+                            } else if translation > 50 || velocity > 100 {
+                                targetExpanded = false
+                            } else {
+                                targetExpanded = isPanelExpanded
+                            }
+                            
+                            // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
+                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                                isPanelExpanded = targetExpanded
+                                dragOffset = 0
+                            }
+                        }
+                )
+                .offset(y: currentOffset) // 头部跟随手势进行位移
+            
+            // B. 内容区域 (静态外层容器 + 内部位移 + 静态裁剪，完美解决任何状态下的穿透)
+            VStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    filterBar
+                        .padding(.vertical, 8)
+                    
+                    Divider()
+                        .background(Color.white.opacity(0.1))
+                    
+                    if viewModel.isLoading {
+                        ProgressView("正在加载场馆数据...")
+                            .progressViewStyle(CircularProgressViewStyle(tint: Theme.brandPrimary))
+                            .foregroundColor(Theme.textPrimary)
+                            .frame(maxHeight: .infinity)
+                    } else if viewModel.filteredVenues.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 32))
+                                .foregroundColor(Theme.textDim)
+                            Text("没有找到符合条件的场馆")
+                                .foregroundColor(Theme.textSecondary)
+                                .font(.subheadline)
+                        }
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            LazyVGrid(columns: columns, spacing: 1) {
+                                ForEach(viewModel.filteredVenues) { venue in
+                                    VenueRowView(venue: venue, distanceText: viewModel.distanceString(for: venue))
+                                        .onTapGesture {
+                                            selectedVenue = venue
+                                        }
+                                }
+                            }
+                            .padding(.top, 8)
+                            .padding(.bottom, 20)
+                        }
+                        .background(Color.clear)
                     }
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(viewModel.selectedRegion == "全部" ? "全部城市" : viewModel.selectedRegion)
-                        .font(.system(size: 13, weight: .medium))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                }
-                .foregroundColor(Theme.textStrong)
-                .padding(.horizontal, 14)
-                .frame(height: 48)
-                .background(Color.white.opacity(0.08)) // 微透圆角胶囊
-                .clipShape(Capsule())
+                .frame(height: maxContentHeight, alignment: .top)
+                .offset(y: currentOffset) // 内部布局跟随拖动向下位移
             }
+            .frame(height: maxContentHeight, alignment: .top) // 外层静态高度容器
+            .clipped() // 在静态高度边界上裁剪，内容只要移出该区域即刻隐藏，绝不穿透至 TabBar
+            .opacity(contentOpacity)
+            .allowsHitTesting(isPanelExpanded)
+            
+            // C. TabBar 区域占位 (始终可见，且不随手势位移)
+            Color.clear.frame(height: tabBarTotalHeight)
         }
-        .padding(.horizontal, 16)
+        .frame(width: geometry.size.width - 24)
+        .frame(height: totalHeight) // 固定整个容器物理高度，避免影响 Spacer 和父容器的排版
+        .background(
+            Color.clear
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 36))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 36)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .frame(height: visibleHeight)
+            , alignment: .bottom // 玻璃背景以底部对齐，使其在折叠时也完美保持底部 12pt 的浮起圆角，不会截断或穿过底部
+        )
     }
     
     /// 排序控制栏
@@ -555,5 +624,29 @@ struct GridPattern: Shape {
         }
         
         return path
+    }
+}
+
+/// 地区选择菜单子视图 - 提取为独立 View 以实现惰性计算，避免拖拽抽屉时频繁在主视图中计算与 Diff
+struct RegionMenuView: View {
+    @ObservedObject var viewModel: VenuesViewModel
+    
+    var body: some View {
+        Button("全部城市") {
+            viewModel.selectedRegion = "全部"
+        }
+        
+        ForEach(viewModel.sortedProvinces, id: \.self) { province in
+            Menu(province) {
+                Button("全部\(province)") {
+                    viewModel.selectedRegion = province
+                }
+                ForEach(viewModel.provinceMap[province] ?? [], id: \.self) { city in
+                    Button(city) {
+                        viewModel.selectedRegion = city
+                    }
+                }
+            }
+        }
     }
 }
