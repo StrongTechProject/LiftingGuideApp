@@ -10,9 +10,9 @@ struct VenuesView: View {
     @State private var position: MapCameraPosition = .automatic
     @State private var geocoder = CLGeocoder() // 持有长生命周期以防止异步回调时被释放导致崩溃
     
-    // 自定义半屏面板状态
-    @State private var isPanelExpanded = true
-    @State private var dragOffset: CGFloat = 0
+    // 原生半屏列表抽屉状态
+    @State private var isListSheetPresented = true
+    @State private var activeDetent: PresentationDetent = .height(120)
     
     private let columns = [
         GridItem(.flexible(), spacing: 1),
@@ -20,45 +20,40 @@ struct VenuesView: View {
     ]
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .bottom) {
-                // 1. 底层铺满的地图
-                Map(position: $position, selection: $selectedMapVenue) {
-                    UserAnnotation()
-                    
-                    ForEach(viewModel.filteredVenues) { venue in
-                        if let lat = venue.lat, let lng = venue.lng {
-                            Annotation(venue.officialName ?? venue.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng)) {
-                                ZStack {
-                                    Circle()
-                                        .fill(Theme.brandPrimary)
-                                        .frame(width: 30, height: 30)
-                                        .shadow(color: Theme.brandPrimary.opacity(0.4), radius: 3, x: 0, y: 1.5)
-                                    
-                                    Image(systemName: "dumbbell.fill")
-                                        .foregroundColor(.white)
-                                        .font(.system(size: 13, weight: .bold))
-                                }
+        ZStack(alignment: .bottom) {
+            // 1. 底层铺满的地图
+            Map(position: $position, selection: $selectedMapVenue) {
+                UserAnnotation()
+                
+                ForEach(viewModel.filteredVenues) { venue in
+                    if let lat = venue.lat, let lng = venue.lng {
+                        Annotation(venue.officialName ?? venue.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng)) {
+                            ZStack {
+                                Circle()
+                                    .fill(Theme.brandPrimary)
+                                    .frame(width: 30, height: 30)
+                                    .shadow(color: Theme.brandPrimary.opacity(0.4), radius: 3, x: 0, y: 1.5)
+                                
+                                Image(systemName: "dumbbell.fill")
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 13, weight: .bold))
                             }
-                            .tag(venue)
                         }
+                        .tag(venue)
                     }
                 }
-                .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
-                .ignoresSafeArea()
-                
-                // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
-                VStack {
-                    LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
-                        .frame(height: 80)
-                        .ignoresSafeArea(edges: .top)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
-                
-                // 3. 自定义半屏列表底盒 (在 tabbar 之上，不遮挡影响 tabbar)
-                customBottomPanel(geometry: geometry)
             }
+            .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+            .ignoresSafeArea()
+            
+            // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
+            VStack {
+                LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
+                    .frame(height: 80)
+                    .ignoresSafeArea(edges: .top)
+                Spacer()
+            }
+            .allowsHitTesting(false)
         }
         .preferredColorScheme(.dark)
         .onAppear {
@@ -78,6 +73,15 @@ struct VenuesView: View {
         // 监听城市选择改变，如果该城市没有场馆，则地理编码并移动到该城市中心
         .onChange(of: viewModel.selectedRegion) { oldValue, newValue in
             handleRegionChange(to: newValue)
+        }
+        // 原生半屏列表抽屉
+        .sheet(isPresented: $isListSheetPresented) {
+            venuesListDrawer
+                .presentationDetents([.height(120), .medium, .large], selection: $activeDetent)
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .interactiveDismissDisabled(true)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Theme.sheetBackground.opacity(0.95))
         }
         // 场馆详情弹出页绑定在主体视图上
         .sheet(item: $selectedVenue) { venue in
@@ -132,50 +136,18 @@ struct VenuesView: View {
         }
     }
     
-    // MARK: - 自定义半屏列表面板
+    // MARK: - 原生半屏列表抽屉内容
     
-    private func customBottomPanel(geometry: GeometryProxy) -> some View {
-        let collapsedHeight: CGFloat = 96
-        let expandedHeight = geometry.size.height * 0.48
-        let targetHeight = isPanelExpanded ? expandedHeight : collapsedHeight
-        let currentHeight = max(collapsedHeight, min(expandedHeight + 40, targetHeight - dragOffset))
-        
-        return VStack(spacing: 0) {
-            // A. 顶部把手 + 搜索及区域选择 (可拖动触发面板缩放)
-            VStack(spacing: 0) {
-                Capsule()
-                    .fill(Color.white.opacity(0.24))
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-                
-                searchAndRegionRow
-                    .padding(.bottom, 8)
-            }
-            .background(Color.clear)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        dragOffset = value.translation.height
-                    }
-                    .onEnded { value in
-                        let velocity = value.predictedEndLocation.y - value.location.y
-                        let translation = value.translation.height
-                        
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            if translation < -80 || velocity < -100 {
-                                isPanelExpanded = true
-                            } else if translation > 80 || velocity > 100 {
-                                isPanelExpanded = false
-                            }
-                            dragOffset = 0
-                        }
-                    }
-            )
+    private var venuesListDrawer: some View {
+        VStack(spacing: 0) {
+            // A. 搜索及区域选择 (始终显示)
+            searchAndRegionRow
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             
-            // B. 过滤器与数据列表 (当面板有足够展开高度时才渲染，避免挤压溢出)
-            if currentHeight > collapsedHeight + 20 {
+            // B. 过滤器与数据列表 (当面板展开至 medium 或 large 时才渲染)
+            if activeDetent != .height(120) {
                 filterBar
                     .padding(.vertical, 8)
                     .transition(.opacity)
@@ -208,7 +180,7 @@ struct VenuesView: View {
                                     }
                             }
                         }
-                        .background(Color.white.opacity(0.08))
+                        .padding(.top, 8)
                     }
                     .background(Color.clear)
                 }
@@ -216,17 +188,7 @@ struct VenuesView: View {
                 Spacer(minLength: 0)
             }
         }
-        .frame(width: geometry.size.width, height: currentHeight, alignment: .top)
-        .background(
-            UnevenRoundedRectangle(topLeadingRadius: 24, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 24)
-                .fill(Theme.sheetBackground.opacity(0.95))
-                .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: -5)
-        )
-        .overlay(
-            UnevenRoundedRectangle(topLeadingRadius: 24, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 24)
-                .stroke(Theme.borderStrong, lineWidth: 1)
-        )
-        .padding(.bottom, 80) // 向上避让悬浮 TabBar 的显示高度
+        .preferredColorScheme(.dark)
     }
     
     // MARK: - 内部子组件

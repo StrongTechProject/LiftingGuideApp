@@ -88,7 +88,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             
             // 执行原生逆地址解析 (Reverse Geocoding)，免去小程序云开发依赖
             print("📍 [LocationManager] 开始逆地理编码...")
-            self.geocoder.reverseGeocodeLocation(location) { placemarks, error in
+            self.geocoder.reverseGeocodeLocation(location, preferredLocale: Locale(identifier: "zh_CN")) { placemarks, error in
                 if let error = error {
                     print("📍 [LocationManager] 逆地理编码失败: \(error.localizedDescription)")
                     return
