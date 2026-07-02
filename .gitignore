@@ -1,0 +1,66 @@
+# ===========================
+# Xcode
+# ===========================
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+*.xcbkptlist
+
+# ===========================
+# Swift Package Manager
+# ===========================
+.build/
+Packages/
+Package.pins
+Package.resolved
+.swiftpm/
+
+# ===========================
+# CocoaPods
+# ===========================
+Pods/
+Podfile.lock
+
+# ===========================
+# macOS
+# ===========================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ===========================
+# Compiled Output
+# ===========================
+*.o
+*.a
+*.dylib
+*.framework
+
+# ===========================
+# Playground
+# ===========================
+timeline.xctimeline
+playground.xcworkspace
+
+# ===========================
+# Fastlane
+# ===========================
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
