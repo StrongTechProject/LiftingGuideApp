@@ -2,6 +2,13 @@ import SwiftUI
 import MapKit
 import CoreLocation
 
+/// 自定义抽屉缩放状态
+enum DrawerState {
+    case collapsed
+    case half
+    case full
+}
+
 /// 场馆页主视图 - iOS 原生重构版 (在 TabBar 上方呈现自定义半屏面板，无遮挡且不影响交互)
 struct VenuesView: View {
     @StateObject private var viewModel = VenuesViewModel()
@@ -11,8 +18,8 @@ struct VenuesView: View {
     @State private var geocoder = CLGeocoder() // 持有长生命周期以防止异步回调时被释放导致崩溃
     
     // 自定义抽屉状态
-    @State private var isPanelExpanded = false
-    @State private var dragOffset: CGFloat = 0 // 使用 @State 从而能在松手动画中与 isPanelExpanded 同步归零，防止抽搐
+    @State private var drawerState: DrawerState = .collapsed
+    @State private var dragOffset: CGFloat = 0 // 使用 @State 从而能在松手动画中与 drawerState 同步归零，防止抽搐
     @State private var showMarkers = true // 缩放比例控制是否显示 Marker
     
     private let columns = [
@@ -29,11 +36,10 @@ struct VenuesView: View {
                 // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
                 statusBarShadow
                 
-                // 3. 自定义列表抽屉 (作为 TabBar 的外圈，底部悬浮于屏幕底边之上 12pt，与左右两边对齐)
+                // 3. 自定义列表抽屉 (作为 TabBar 的外圈，在折叠/半屏下悬浮于屏幕底边之上 12pt，全屏下撑满底边，与左右边对齐)
                 VStack {
                     Spacer()
                     customDrawer(geometry: geometry)
-                        .padding(.bottom, 12)
                 }
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -66,7 +72,7 @@ struct VenuesView: View {
             if let venue = newValue {
                 // 1. 展开抽屉
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                    isPanelExpanded = true
+                    drawerState = .half
                 }
                 
                 // 2. 地图移动并聚焦场馆坐标 (使用 0.008 经纬度跨度，南移 1/6 跨度使 Marker 显露于屏幕上 1/3 处)
@@ -120,9 +126,9 @@ struct VenuesView: View {
                 .onChanged { value in
                     // 检测向下划动（手指下移，translation.height > 0）
                     if value.translation.height > 30 {
-                        if isPanelExpanded {
+                        if drawerState != .collapsed {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                isPanelExpanded = false
+                                drawerState = .collapsed
                             }
                         }
                     }
@@ -269,21 +275,60 @@ struct VenuesView: View {
         
         // 计算屏幕物理总高度（可用区域 + 顶部安全区 + 底部安全区）
         let screenHeight = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
-        // 展开时，由于抽屉底部有 12pt 的浮动边距，整个抽屉的高度应为屏幕高度一半减去 12pt，以保证顶部边缘依然精确对齐于屏幕中线
-        let targetTotalHeight = screenHeight * 0.5 - 12
-        let maxContentHeight = targetTotalHeight - headerHeight - tabBarTotalHeight
         
-        let baseOffset: CGFloat = isPanelExpanded ? 0 : maxContentHeight
+        // 三级高度定义
+        let hCollapsed = headerHeight + tabBarTotalHeight
+        let hHalf = screenHeight * 0.5 - 12
+        let hFull = screenHeight - geometry.safeAreaInsets.top // 顶端展开状态：物理高度完全拉满至状态栏下方
+        
+        // 是否处于第三级最大化状态
+        let isFull = drawerState == .full
+        
+        // 动态容器高度：全屏或正在拖拽时，高度拉满为 hFull；静态折叠/半屏下，为原版 hHalf (414pt)
+        let useFullHeight = isFull || dragOffset != 0
+        let totalHeight = useFullHeight ? hFull : hHalf
+        
+        // 最大可用内容高度
+        let maxContentHeight = totalHeight - headerHeight - tabBarTotalHeight
+        
+        // 基础偏移量：非全屏静态下，完美还原原版（折叠状态为 maxContentHeight，半屏状态为 0）
+        let baseOffset: CGFloat
+        if useFullHeight {
+            baseOffset = isFull ? 0 : (drawerState == .collapsed ? (hFull - hCollapsed) : (hFull - hHalf))
+        } else {
+            switch drawerState {
+            case .collapsed:
+                baseOffset = maxContentHeight
+            case .half:
+                baseOffset = 0
+            case .full:
+                baseOffset = 0
+            }
+        }
+        
         let rawOffset = baseOffset + dragOffset
-        // 限制拖拽偏移：向上最多拉出 24 点弹性空间，向下最多超出 40 点弹性空间
-        let currentOffset = max(-24, min(maxContentHeight + 40, rawOffset))
         
-        // 当 currentOffset 变化时，计算可见高度用于淡入淡出（在展开/折叠最后 60 点内平滑过渡）
-        let visibleContentHeight = maxContentHeight - currentOffset
-        let contentOpacity = max(0.0, min(1.0, Double(visibleContentHeight / 60.0)))
+        // 动态限制拖拽偏移量：允许手势在拖拽时一路拉到最顶端，向下最多超出 40 点弹性空间
+        let currentOffset = max(-24, min(useFullHeight ? (hFull - hCollapsed + 40) : (maxContentHeight + 40), rawOffset))
         
-        let totalHeight = headerHeight + maxContentHeight + tabBarTotalHeight
-        let visibleHeight = headerHeight + (maxContentHeight - currentOffset) + tabBarTotalHeight
+        // 计算从半屏到全屏的过渡进度 (0.0 代表半屏或以下，1.0 代表拉满到全屏)
+        let progress = useFullHeight ? (isFull ? 1.0 : max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf))))) : 0.0
+        
+        // 动态计算宽度、底部边距、底角圆角半径，以实现从“悬浮卡片”到“全宽铺满屏幕”的平滑跟手缩放
+        let drawerWidth = (geometry.size.width - 24) + (24 * progress)
+        let bottomPadding = 12 * (1.0 - progress)
+        let bottomCornerRadius = 36 * (1.0 - progress)
+        
+        // 当 currentOffset 变化时，计算可见高度与淡入淡出透明度
+        let visibleHeight: CGFloat
+        let contentOpacity: Double
+        if useFullHeight {
+            visibleHeight = totalHeight - currentOffset
+            contentOpacity = max(0.0, min(1.0, Double(((hFull - hCollapsed) - currentOffset) / 60.0)))
+        } else {
+            visibleHeight = headerHeight + (maxContentHeight - currentOffset) + tabBarTotalHeight
+            contentOpacity = max(0.0, min(1.0, Double((maxContentHeight - currentOffset) / 60.0)))
+        }
         
         return VStack(spacing: 0) {
             // A. 头部 (始终可见)
@@ -306,19 +351,50 @@ struct VenuesView: View {
                         let velocity = value.predictedEndLocation.y - value.location.y
                         let translation = value.translation.height
                         
-                        // 决定最终 snapping 目标
-                        let targetExpanded: Bool
-                        if translation < -50 || velocity < -100 {
-                            targetExpanded = true
-                        } else if translation > 50 || velocity > 100 {
-                            targetExpanded = false
+                        // Current position (offset from full)
+                        let currentPos = baseOffset + translation
+                        
+                        let targetState: DrawerState
+                        
+                        if velocity < -200 {
+                            // Fast drag up: upgrade state
+                            switch drawerState {
+                            case .collapsed:
+                                targetState = .half
+                            case .half:
+                                targetState = .full
+                            case .full:
+                                targetState = .full
+                            }
+                        } else if velocity > 200 {
+                            // Fast drag down: downgrade state
+                            switch drawerState {
+                            case .collapsed:
+                                targetState = .collapsed
+                            case .half:
+                                targetState = .collapsed
+                            case .full:
+                                targetState = .half
+                            }
                         } else {
-                            targetExpanded = isPanelExpanded
+                            // Slow drag: snap to the nearest state
+                            let distFull = abs(currentPos - 0)
+                            let distHalf = abs(currentPos - (hFull - hHalf))
+                            let distCollapsed = abs(currentPos - (hFull - hCollapsed))
+                            
+                            let minDist = min(distFull, min(distHalf, distCollapsed))
+                            if minDist == distFull {
+                                targetState = .full
+                            } else if minDist == distHalf {
+                                targetState = .half
+                            } else {
+                                targetState = .collapsed
+                            }
                         }
                         
                         // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
                         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                            isPanelExpanded = targetExpanded
+                            drawerState = targetState
                             dragOffset = 0
                         }
                     }
@@ -425,7 +501,7 @@ struct VenuesView: View {
                     }
                 )
                 .opacity(contentOpacity)
-                .allowsHitTesting(isPanelExpanded)
+                .allowsHitTesting(drawerState != .collapsed)
                 
                 // 2. TabBar 区域占位 (置于顶层，始终可见，允许点击穿透)
                 Color.clear
@@ -433,19 +509,38 @@ struct VenuesView: View {
                     .allowsHitTesting(false)
             }
         }
-        .frame(width: geometry.size.width - 24)
+        .frame(width: drawerWidth)
         .frame(height: totalHeight) // 固定整个容器物理高度，避免影响 Spacer 和父容器的排版
         .background(
-            Color.clear
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 36))
-                .background(RoundedRectangle(cornerRadius: 36).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
-                .overlay(
-                    RoundedRectangle(cornerRadius: 36)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-                .frame(height: visibleHeight)
-            , alignment: .bottom // 玻璃背景以底部对齐，使其在折叠时也完美保持底部 12pt 的浮起圆角，不会截断或穿过底部
+            Group {
+                if progress == 0 {
+                    Color.clear
+                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 36))
+                        .background(RoundedRectangle(cornerRadius: 36).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 36)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                } else {
+                    let transitionShape = UnevenRoundedRectangle(
+                        topLeadingRadius: 36,
+                        bottomLeadingRadius: bottomCornerRadius,
+                        bottomTrailingRadius: bottomCornerRadius,
+                        topTrailingRadius: 36
+                    )
+                    Color.clear
+                        .glassEffect(.regular.interactive(), in: transitionShape)
+                        .background(transitionShape.fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
+                        .overlay(
+                            transitionShape
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                }
+            }
+            .frame(height: visibleHeight)
+            , alignment: .bottom // 玻璃背景以底部对齐，使其在折叠时也完美保持底角圆角，不会截断或穿过底部
         )
+        .padding(.bottom, bottomPadding)
     }
     
     /// 排序控制栏
@@ -489,14 +584,7 @@ struct VenuesView: View {
                             .foregroundColor(Theme.textStrong)
                             .lineLimit(1)
                         
-                        // 2. 详细地址与距离
-                        let distanceText = viewModel.distanceString(for: venue) != nil ? " • 距离您 \(viewModel.distanceString(for: venue)!)" : ""
-                        Text("\(venue.address ?? venue.location)\(distanceText)")
-                            .font(.system(size: 14))
-                            .foregroundColor(Theme.textStrong)
-                            .lineLimit(1)
-                        
-                        // 3. 指示灯、斜杠格式化地区、备注组合
+                        // 2. 指示灯、斜杠格式化地区、备注组合
                         HStack(spacing: 6) {
                             RefereeLightsView(lights: venue.equipmentLights)
                             
@@ -504,10 +592,17 @@ struct VenuesView: View {
                             let remarkText = venue.remark != nil && !venue.remark!.isEmpty ? " • \(venue.remark!)" : ""
                             
                             Text("\(formattedRegion)\(remarkText)")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textSecondary)
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.textStrong)
                                 .lineLimit(1)
                         }
+                        
+                        // 3. 详细地址与距离
+                        let distanceText = viewModel.distanceString(for: venue) != nil ? " • \(viewModel.distanceString(for: venue)!)" : ""
+                        Text("\(venue.address ?? venue.location)\(distanceText)")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
                     }
                     
                     Spacer()
