@@ -300,14 +300,9 @@ struct VenuesView: View {
         // 计算从半屏到全屏的过渡进度 (0.0 代表半屏或以下，1.0 代表拉满到全屏)
         let progress = max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf))))
         
-        // 动态计算宽度、底部边距、底角圆角半径，以实现从“悬浮卡片”到“全宽铺满屏幕”的平滑跟手缩放
-        let cardCornerRadius: CGFloat = 44
+        let cardCornerRadius: CGFloat = 40
         let drawerWidth = (geometry.size.width - 28) + (28 * progress)
         let bottomPadding = 14 * (1.0 - progress)
-        let p2 = progress * progress
-        let p4 = p2 * p2
-        let p8 = p4 * p4
-        let bottomCornerRadius = cardCornerRadius * (1.0 - p8)
         
         // 抽屉实际可见的高度
         let visibleHeight = hFull - currentOffset
@@ -497,31 +492,13 @@ struct VenuesView: View {
         .frame(width: drawerWidth)
         .frame(height: visibleHeight) // 外层容器高度与可见高度完全一致，不再出现高度突变
         .background(
-            Group {
-                if progress == 0 {
-                    Color.clear
-                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cardCornerRadius))
-                        .background(RoundedRectangle(cornerRadius: cardCornerRadius).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
-                        .overlay(
-                            RoundedRectangle(cornerRadius: cardCornerRadius)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                } else {
-                    let transitionShape = UnevenRoundedRectangle(
-                        topLeadingRadius: cardCornerRadius,
-                        bottomLeadingRadius: bottomCornerRadius,
-                        bottomTrailingRadius: bottomCornerRadius,
-                        topTrailingRadius: cardCornerRadius
-                    )
-                    Color.clear
-                        .glassEffect(.regular.interactive(), in: transitionShape)
-                        .background(transitionShape.fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
-                        .overlay(
-                            transitionShape
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                }
-            }
+            Color.clear
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cardCornerRadius))
+                .background(RoundedRectangle(cornerRadius: cardCornerRadius).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
+                .overlay(
+                    RoundedRectangle(cornerRadius: cardCornerRadius)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
         )
         .padding(.bottom, bottomPadding)
     }
