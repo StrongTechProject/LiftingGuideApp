@@ -24,39 +24,10 @@ struct VenuesView: View {
         GeometryReader { geometry in
             ZStack(alignment: .bottom) {
                 // 1. 底层铺满的地图
-                Map(position: $position, selection: $selectedMapVenue) {
-                    UserAnnotation()
-                    
-                    if showMarkers {
-                        ForEach(viewModel.filteredVenues) { venue in
-                            if let lat = venue.lat, let lng = venue.lng {
-                                Marker(venue.officialName ?? venue.name, systemImage: "dumbbell.fill", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng))
-                                    .tint(.orange) // 🧡 使用 Apple 地图官方的健身房珊瑚橙色
-                                    .tag(venue)
-                            }
-                        }
-                    }
-                }
-                .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
-                .onMapCameraChange(frequency: .continuous) { context in
-                    let delta = context.region.span.latitudeDelta
-                    let shouldShow = delta < 5.0 // 纬度跨度 delta >= 5.0（大概相当于一个广东省的大小范围）时隐藏大头针
-                    if showMarkers != shouldShow {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            showMarkers = shouldShow
-                        }
-                    }
-                }
-                .ignoresSafeArea()
+                mapView
                 
                 // 2. 顶部状态栏渐变阴影，确保时间/电量图标清晰
-                VStack {
-                    LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
-                        .frame(height: 80)
-                        .ignoresSafeArea(edges: .top)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
+                statusBarShadow
                 
                 // 3. 自定义列表抽屉 (作为 TabBar 的外圈，底部悬浮于屏幕底边之上 12pt，与左右两边对齐)
                 VStack {
@@ -80,20 +51,94 @@ struct VenuesView: View {
                 selectedMapVenue = nil // 清空选中状态以便下次能再次点击
             }
         }
-        // 列表数据变化时，重设地图相机视角以包含所有标记
+        // 列表数据变化时，若没有选中场馆，则重设地图相机视角以包含所有标记
         .onChange(of: viewModel.filteredVenues) { oldValue, newValue in
-            updateCameraPosition(for: newValue)
+            if selectedVenue == nil {
+                updateCameraPosition(for: newValue)
+            }
         }
         // 监听城市选择改变，如果该城市没有场馆，则地理编码并移动到该城市中心
         .onChange(of: viewModel.selectedRegion) { oldValue, newValue in
             handleRegionChange(to: newValue)
         }
-        // 场馆详情弹出页绑定在主体视图上
-        .sheet(item: $selectedVenue) { venue in
-            VenueDetailSheet(venue: venue)
-                .presentationDetents([.fraction(0.5), .large])
-                .presentationDragIndicator(.visible)
+        // 监听选中场馆变化，实现抽屉展开、地图相机移动聚焦及还原
+        .onChange(of: selectedVenue) { oldValue, newValue in
+            if let venue = newValue {
+                // 1. 展开抽屉
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    isPanelExpanded = true
+                }
+                
+                // 2. 地图移动并聚焦场馆坐标 (使用 0.008 经纬度跨度，南移 1/6 跨度使 Marker 显露于屏幕上 1/3 处)
+                if let lat = venue.lat, let lng = venue.lng {
+                    let latitudeDelta = 0.008
+                    let longitudeDelta = 0.008
+                    let centerLat = lat - (latitudeDelta / 6.0)
+                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                        position = .region(
+                            MKCoordinateRegion(
+                                center: CLLocationCoordinate2D(latitude: centerLat, longitude: lng),
+                                span: MKCoordinateSpan(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
+                            )
+                        )
+                    }
+                }
+            } else {
+                // 3. 关闭详情时，还原相机包揽全部筛选场馆
+                updateCameraPosition(for: viewModel.filteredVenues)
+            }
         }
+    }
+    
+    private var mapView: some View {
+        Map(position: $position, selection: $selectedMapVenue) {
+            UserAnnotation()
+            
+            if showMarkers {
+                ForEach(viewModel.filteredVenues) { venue in
+                    if let lat = venue.lat, let lng = venue.lng {
+                        Marker(venue.officialName ?? venue.name, systemImage: "dumbbell.fill", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng))
+                            .tint(.orange) // 🧡 使用 Apple 地图官方的健身房珊瑚橙色
+                            .tag(venue)
+                    }
+                }
+            }
+        }
+        .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+        .onMapCameraChange(frequency: .continuous) { context in
+            // 1. 控制大头针显示/隐藏
+            let delta = context.region.span.latitudeDelta
+            let shouldShow = delta < 5.0 // 纬度跨度 delta >= 5.0（大概相当于一个广东省的大小范围）时隐藏大头针
+            if showMarkers != shouldShow {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showMarkers = shouldShow
+                }
+            }
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    // 检测向下划动（手指下移，translation.height > 0）
+                    if value.translation.height > 30 {
+                        if isPanelExpanded {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                isPanelExpanded = false
+                            }
+                        }
+                    }
+                }
+        )
+        .ignoresSafeArea()
+    }
+    
+    private var statusBarShadow: some View {
+        VStack {
+            LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]), startPoint: .top, endPoint: .bottom)
+                .frame(height: 80)
+                .ignoresSafeArea(edges: .top)
+            Spacer()
+        }
+        .allowsHitTesting(false)
     }
     
     /// 根据过滤后的场馆列表智能更新地图相机视角 (手动计算边界，防止 .automatic 因隐藏 Marker 而失效)
@@ -218,7 +263,7 @@ struct VenuesView: View {
     }
     
     private func customDrawer(geometry: GeometryProxy) -> some View {
-        let headerHeight: CGFloat = 72
+        let headerHeight: CGFloat = selectedVenue != nil ? 110 : 72
         // safeAreaInsets.bottom 在 TabView 内已包含 TabBar 高度 + Home Indicator
         let tabBarTotalHeight = geometry.safeAreaInsets.bottom
         
@@ -242,78 +287,90 @@ struct VenuesView: View {
         
         return VStack(spacing: 0) {
             // A. 头部 (始终可见)
-            drawerHeaderView
-                .frame(height: headerHeight)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(coordinateSpace: .global)
-                        .onChanged { value in
-                            // 实时同步手势位移
-                            dragOffset = value.translation.height
+            Group {
+                if selectedVenue != nil {
+                    detailHeaderView
+                } else {
+                    drawerHeaderView
+                }
+            }
+            .frame(height: headerHeight)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(coordinateSpace: .global)
+                    .onChanged { value in
+                        // 实时同步手势位移
+                        dragOffset = value.translation.height
+                    }
+                    .onEnded { value in
+                        let velocity = value.predictedEndLocation.y - value.location.y
+                        let translation = value.translation.height
+                        
+                        // 决定最终 snapping 目标
+                        let targetExpanded: Bool
+                        if translation < -50 || velocity < -100 {
+                            targetExpanded = true
+                        } else if translation > 50 || velocity > 100 {
+                            targetExpanded = false
+                        } else {
+                            targetExpanded = isPanelExpanded
                         }
-                        .onEnded { value in
-                            let velocity = value.predictedEndLocation.y - value.location.y
-                            let translation = value.translation.height
-                            
-                            // 决定最终 snapping 目标
-                            let targetExpanded: Bool
-                            if translation < -50 || velocity < -100 {
-                                targetExpanded = true
-                            } else if translation > 50 || velocity > 100 {
-                                targetExpanded = false
-                            } else {
-                                targetExpanded = isPanelExpanded
-                            }
-                            
-                            // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
-                            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                                isPanelExpanded = targetExpanded
-                                dragOffset = 0
-                            }
+                        
+                        // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                            isPanelExpanded = targetExpanded
+                            dragOffset = 0
                         }
-                )
-                .offset(y: currentOffset) // 头部跟随手势进行位移
+                    }
+            )
+            .offset(y: currentOffset) // 头部跟随手势进行位移
             
             // B. 内容与 TabBar 区域 (使用 ZStack 叠层，允许内容滚动到 TabBar 下方并渐变消失)
             ZStack(alignment: .bottom) {
                 // 1. 内容容器 (高度延伸到最底部，覆盖 TabBar 空间)
                 VStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        filterBar
-                            .padding(.vertical, 8)
-                        
-                        Divider()
-                            .background(Color.white.opacity(0.1))
-                        
-                        if viewModel.isLoading {
-                            ProgressView("正在加载场馆数据...")
-                                .progressViewStyle(CircularProgressViewStyle(tint: Theme.brandPrimary))
-                                .foregroundColor(Theme.textPrimary)
-                                .frame(maxHeight: .infinity)
-                        } else if viewModel.filteredVenues.isEmpty {
-                            VStack(spacing: 12) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(Theme.textDim)
-                                Text("没有找到符合条件的场馆")
-                                    .foregroundColor(Theme.textSecondary)
-                                    .font(.subheadline)
-                            }
-                            .frame(maxHeight: .infinity)
+                    Group {
+                        if let venue = selectedVenue {
+                            detailBodyView(venue: venue)
                         } else {
-                            ScrollView {
-                                LazyVGrid(columns: columns, spacing: 1) {
-                                    ForEach(viewModel.filteredVenues) { venue in
-                                        VenueRowView(venue: venue, distanceText: viewModel.distanceString(for: venue))
-                                            .onTapGesture {
-                                                selectedVenue = venue
-                                            }
+                            VStack(spacing: 0) {
+                                filterBar
+                                    .padding(.vertical, 8)
+                                
+                                Divider()
+                                    .background(Color.white.opacity(0.1))
+                                
+                                if viewModel.isLoading {
+                                    ProgressView("正在加载场馆数据...")
+                                        .progressViewStyle(CircularProgressViewStyle(tint: Theme.brandPrimary))
+                                        .foregroundColor(Theme.textPrimary)
+                                        .frame(maxHeight: .infinity)
+                                } else if viewModel.filteredVenues.isEmpty {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(Theme.textDim)
+                                        Text("没有找到符合条件的场馆")
+                                            .foregroundColor(Theme.textSecondary)
+                                            .font(.subheadline)
                                     }
+                                    .frame(maxHeight: .infinity)
+                                } else {
+                                    ScrollView {
+                                        LazyVGrid(columns: columns, spacing: 1) {
+                                            ForEach(viewModel.filteredVenues) { venue in
+                                                VenueRowView(venue: venue, distanceText: viewModel.distanceString(for: venue))
+                                                    .onTapGesture {
+                                                        selectedVenue = venue
+                                                    }
+                                            }
+                                        }
+                                        .padding(.top, 8)
+                                        .padding(.bottom, 20)
+                                    }
+                                    .background(Color.clear)
                                 }
-                                .padding(.top, 8)
-                                .padding(.bottom, 20)
                             }
-                            .background(Color.clear)
                         }
                     }
                     .frame(height: maxContentHeight + tabBarTotalHeight, alignment: .top)
@@ -381,6 +438,157 @@ struct VenuesView: View {
             .frame(width: 120)
         }
         .padding(.horizontal, 16)
+    }
+    
+    // MARK: - 场馆详情内建组件 (与 Apple Maps 体验对齐)
+    
+    /// 详情页置顶 Header View
+    private var detailHeaderView: some View {
+        VStack(spacing: 8) {
+            // A. 顶部把手
+            Capsule()
+                .fill(Color.white.opacity(0.24))
+                .frame(width: 36, height: 5)
+                .padding(.top, 8)
+            
+            // B. 详情头部内容 (标题 + 地址/距离 + 指示灯/区域/备注 + 关闭按钮)
+            if let venue = selectedVenue {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        // 1. 官方名称作为主标题
+                        Text(venue.officialName ?? venue.name)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(Theme.textStrong)
+                            .lineLimit(1)
+                        
+                        // 2. 详细地址与距离
+                        let distanceText = viewModel.distanceString(for: venue) != nil ? " • 距离您 \(viewModel.distanceString(for: venue)!)" : ""
+                        Text("\(venue.address ?? venue.location)\(distanceText)")
+                            .font(.system(size: 14))
+                            .foregroundColor(Theme.textStrong)
+                            .lineLimit(1)
+                        
+                        // 3. 指示灯、斜杠格式化地区、备注组合
+                        HStack(spacing: 6) {
+                            RefereeLightsView(lights: venue.equipmentLights)
+                            
+                            let formattedRegion = "中国 / " + venue.displayRegion.replacingOccurrences(of: " ", with: " / ")
+                            let remarkText = venue.remark != nil && !venue.remark!.isEmpty ? " • \(venue.remark!)" : ""
+                            
+                            Text("\(formattedRegion)\(remarkText)")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // 关闭按钮 (清除选中状态以切回列表)
+                    Button(action: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                            selectedVenue = nil
+                        }
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(Theme.textSecondary)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .padding(.top, 2)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
+        }
+    }
+    
+    /// 详情页滚动主体 View
+    private func detailBodyView(venue: Venue) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // 器械规格标题
+                Text("器械设备规格")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Theme.textStrong)
+                    .padding(.top, 8)
+                
+                if venue.hasEquipment {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                            ForEach(venue.equipmentDisplaySlots) { slot in
+                                if slot.key == "barbellBrand" {
+                                    GridRow {
+                                        // 第一列：器械名称
+                                        Text(slot.label)
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(Theme.textStrong)
+                                            .frame(width: 80, alignment: .leading)
+                                        
+                                        // 第二、三列合并：品牌列表 (与前三行的数量对齐)
+                                        let barbellText = slot.value == "-" ? "" : slot.value
+                                        Text(barbellText)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textSecondary)
+                                            .multilineTextAlignment(.leading)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .gridCellColumns(2)
+                                    }
+                                } else {
+                                    GridRow {
+                                        // 第一列：器械名称
+                                        Text(slot.label)
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(Theme.textStrong)
+                                            .frame(width: 80, alignment: .leading)
+                                        
+                                        // 第二列：数量值
+                                        let showValue = slot.value == "-" ? "" : slot.value
+                                        Text(showValue)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textSecondary)
+                                            .frame(width: 100, alignment: .leading)
+                                        
+                                        // 第三列：具体品牌/规格 (中点左对齐)
+                                        Text(slot.brandLine)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textSecondary)
+                                            .multilineTextAlignment(.leading)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let note = venue.equipment?.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("器械备注")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(Theme.textSecondary)
+                                Text(note)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .lineSpacing(3)
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "circle.slash")
+                            .font(.system(size: 20))
+                            .foregroundColor(Theme.textDim)
+                        Text("暂无详细器械登记数据")
+                            .foregroundColor(Theme.textSecondary)
+                            .font(.system(size: 12))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
     }
 }
 
