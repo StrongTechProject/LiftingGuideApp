@@ -21,6 +21,7 @@ struct VenuesView: View {
     @State private var drawerState: DrawerState = .collapsed
     @State private var dragOffset: CGFloat = 0 // 使用 @State 从而能在松手动画中与 drawerState 同步归零，防止抽搐
     @State private var showMarkers = true // 缩放比例控制是否显示 Marker
+    @FocusState private var isSearchFocused: Bool // 搜索框聚焦状态
     
     private let columns = [
         GridItem(.flexible(), spacing: 1),
@@ -57,9 +58,9 @@ struct VenuesView: View {
                 selectedMapVenue = nil // 清空选中状态以便下次能再次点击
             }
         }
-        // 列表数据变化时，若没有选中场馆，则重设地图相机视角以包含所有标记
+        // 列表数据变化时，若没有选中场馆且当前没有在聚焦搜索框（避免输入时频繁抖动镜头），则重设地图相机视角以包含所有标记
         .onChange(of: viewModel.filteredVenues) { oldValue, newValue in
-            if selectedVenue == nil {
+            if selectedVenue == nil && !isSearchFocused {
                 updateCameraPosition(for: newValue)
             }
         }
@@ -92,6 +93,20 @@ struct VenuesView: View {
             } else {
                 // 3. 关闭详情时，还原相机包揽全部筛选场馆
                 updateCameraPosition(for: viewModel.filteredVenues)
+            }
+        }
+        // 监听搜索框聚焦状态，一旦聚焦则自动拉起抽屉至最大；一旦失去焦点且没有选中具体场馆，则根据搜索结果更新一次相机
+        .onChange(of: isSearchFocused) { oldValue, newValue in
+            if newValue {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    drawerState = .full
+                }
+            } else {
+                if selectedVenue == nil {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        updateCameraPosition(for: viewModel.filteredVenues)
+                    }
+                }
             }
         }
     }
@@ -220,26 +235,9 @@ struct VenuesView: View {
                 .frame(width: 36, height: 5)
                 .padding(.top, 8)
             
-            // B. 地区选择与搜索条横排 (更加紧凑，取消探索场馆大标题)
+            // B. 地区选择与搜索条横排 (新版布局：搜索框常驻左侧，地区筛选器置于右侧，搜索时渐变为 X 关闭按钮)
             HStack(spacing: 8) {
-                // 左侧地区选择器
-                Menu {
-                    RegionMenuView(viewModel: viewModel)
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(viewModel.selectedRegion == "全部" ? "全部城市" : viewModel.selectedRegion)
-                            .font(.system(size: 13, weight: .semibold))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                    }
-                    .foregroundColor(Theme.textStrong)
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .background(Capsule().fill(Color.black.opacity(0.35)))
-                    .glassEffect(.regular.interactive(), in: .capsule) // iOS 26 交互式液态玻璃质感
-                }
-                
-                // 右侧搜索条
+                // 左侧搜索条 (常驻左侧)
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(Theme.textSecondary)
@@ -250,6 +248,7 @@ struct VenuesView: View {
                         .foregroundColor(.white)
                         .font(.system(size: 13))
                         .autocorrectionDisabled()
+                        .focused($isSearchFocused)
                     
                     if !viewModel.searchQuery.isEmpty {
                         Button(action: { viewModel.searchQuery = "" }) {
@@ -262,6 +261,53 @@ struct VenuesView: View {
                 .frame(height: 36)
                 .background(Capsule().fill(Color.black.opacity(0.35)))
                 .glassEffect(.regular.interactive(), in: .capsule) // iOS 26 交互式液态玻璃质感
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                        isSearchFocused = true
+                    }
+                }
+                
+                // 右侧动态组件 (非搜索状态为筛选器，搜索状态为 X 型关闭按钮)
+                if !isSearchFocused {
+                    Menu {
+                        RegionMenuView(viewModel: viewModel)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(viewModel.selectedRegion == "全部" ? "全部城市" : viewModel.selectedRegion)
+                                .font(.system(size: 13, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundColor(Theme.textStrong)
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(Capsule().fill(Color.black.opacity(0.35)))
+                        .glassEffect(.regular.interactive(), in: .capsule) // iOS 26 交互式液态玻璃质感
+                    }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+                } else {
+                    // X 型关闭按钮，点击收起搜索并重置为半屏大小
+                    Button(action: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                            isSearchFocused = false
+                            drawerState = .half
+                            viewModel.searchQuery = "" // 退出输入并清空搜索内容
+                        }
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(Theme.textSecondary)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .frame(width: 36, height: 36)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+                }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
@@ -294,12 +340,17 @@ struct VenuesView: View {
         
         let rawOffset = baseOffset + dragOffset
         
-        // 动态限制拖拽偏移量：允许手势在拖拽时一路拉到最顶端，向下最多超出 40 点弹性空间
-        let currentOffset = max(-24, min(hFull - hCollapsed + 40, rawOffset))
+        // 动态限制拖拽偏移量：详情页下最高拉到半屏（允许 20pt 弹性），列表页下可拉到最顶端，向下最多超出 40点弹性空间
+        let minOffset = selectedVenue != nil ? (hFull - hHalf - 20) : -24
+        let currentOffset = max(minOffset, min(hFull - hCollapsed + 40, rawOffset))
         
         // 计算从半屏到全屏的过渡进度 (0.0 代表半屏或以下，1.0 代表拉满到全屏)
         let progress = max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf))))
         
+        // 计算从玻璃状态切换到实色状态的过渡进度 (在 progress 为 0.45 到 0.55 之间进行交叉淡化)
+        let transitionProgress = max(0.0, min(1.0, (progress - 0.45) / 0.1))
+        
+        // 保持圆角大小不变，固定为 40pt
         let cardCornerRadius: CGFloat = 40
         let drawerWidth = (geometry.size.width - 28) + (28 * progress)
         let bottomPadding = 14 * (1.0 - progress)
@@ -312,6 +363,73 @@ struct VenuesView: View {
         // 计算安全的内容高度，防止弹性回弹时出现负值
         let contentHeight = max(0, visibleHeight - headerHeight)
         
+        // 定义可重用的拖拽手势
+        let sharedDragGesture = DragGesture(coordinateSpace: .global)
+            .onChanged { value in
+                // 实时同步手势位移
+                dragOffset = value.translation.height
+            }
+            .onEnded { value in
+                let velocity = value.predictedEndLocation.y - value.location.y
+                let translation = value.translation.height
+                
+                // Current position (offset from full)
+                let currentPos = baseOffset + translation
+                
+                let targetState: DrawerState
+                
+                if velocity < -200 {
+                    // Fast drag up: upgrade state
+                    switch drawerState {
+                    case .collapsed:
+                        targetState = .half
+                    case .half, .full:
+                        targetState = selectedVenue != nil ? .half : .full
+                    }
+                } else if velocity > 200 {
+                    // Fast drag down: downgrade state
+                    switch drawerState {
+                    case .collapsed:
+                        targetState = .collapsed
+                    case .half:
+                        targetState = .collapsed
+                    case .full:
+                        targetState = .half
+                    }
+                } else {
+                    // Slow drag: snap to the nearest state
+                    let distFull = abs(currentPos - 0)
+                    let distHalf = abs(currentPos - (hFull - hHalf))
+                    let distCollapsed = abs(currentPos - (hFull - hCollapsed))
+                    
+                    if selectedVenue != nil {
+                        // 详情页模式下限制最大尺寸为半屏，只在半屏与折叠两个档位贴合
+                        let dists = [distHalf, distCollapsed]
+                        let minDist = dists.min()!
+                        if minDist == distHalf {
+                            targetState = .half
+                        } else {
+                            targetState = .collapsed
+                        }
+                    } else {
+                        let minDist = min(distFull, min(distHalf, distCollapsed))
+                        if minDist == distFull {
+                            targetState = .full
+                        } else if minDist == distHalf {
+                            targetState = .half
+                        } else {
+                            targetState = .collapsed
+                        }
+                    }
+                }
+                
+                // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    drawerState = targetState
+                    dragOffset = 0
+                }
+            }
+        
         return VStack(spacing: 0) {
             // A. 头部 (始终可见，其在容器中的位置天然由容器高度控制，无需使用 offset)
             Group {
@@ -323,64 +441,7 @@ struct VenuesView: View {
             }
             .frame(height: headerHeight)
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(coordinateSpace: .global)
-                    .onChanged { value in
-                        // 实时同步手势位移
-                        dragOffset = value.translation.height
-                    }
-                    .onEnded { value in
-                        let velocity = value.predictedEndLocation.y - value.location.y
-                        let translation = value.translation.height
-                        
-                        // Current position (offset from full)
-                        let currentPos = baseOffset + translation
-                        
-                        let targetState: DrawerState
-                        
-                        if velocity < -200 {
-                            // Fast drag up: upgrade state
-                            switch drawerState {
-                            case .collapsed:
-                                targetState = .half
-                            case .half:
-                                targetState = .full
-                            case .full:
-                                targetState = .full
-                            }
-                        } else if velocity > 200 {
-                            // Fast drag down: downgrade state
-                            switch drawerState {
-                            case .collapsed:
-                                targetState = .collapsed
-                            case .half:
-                                targetState = .collapsed
-                            case .full:
-                                targetState = .half
-                            }
-                        } else {
-                            // Slow drag: snap to the nearest state
-                            let distFull = abs(currentPos - 0)
-                            let distHalf = abs(currentPos - (hFull - hHalf))
-                            let distCollapsed = abs(currentPos - (hFull - hCollapsed))
-                            
-                            let minDist = min(distFull, min(distHalf, distCollapsed))
-                            if minDist == distFull {
-                                targetState = .full
-                            } else if minDist == distHalf {
-                                targetState = .half
-                            } else {
-                                targetState = .collapsed
-                            }
-                        }
-                        
-                        // 在同一次动画事务中更新状态并清空拖拽位移，以实现完美跟手到回弹的无缝衔接
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                            drawerState = targetState
-                            dragOffset = 0
-                        }
-                    }
-            )
+            .gesture(sharedDragGesture)
             
             // B. 内容与 TabBar 区域 (使用 ZStack 叠层，允许内容滚动到 TabBar 下方并渐变消失)
             ZStack(alignment: .bottom) {
@@ -389,6 +450,7 @@ struct VenuesView: View {
                     Group {
                         if let venue = selectedVenue {
                             detailBodyView(venue: venue)
+                                .simultaneousGesture(sharedDragGesture, including: drawerState == .collapsed ? .all : .none)
                         } else {
                             VStack(spacing: 0) {
                                 filterBar
@@ -454,6 +516,8 @@ struct VenuesView: View {
                                         .padding(.bottom, 20)
                                     }
                                     .background(Color.clear)
+                                    .scrollDisabled(drawerState != .full)
+                                    .simultaneousGesture(sharedDragGesture, including: drawerState != .full ? .all : .none)
                                 }
                             }
                         }
@@ -492,13 +556,22 @@ struct VenuesView: View {
         .frame(width: drawerWidth)
         .frame(height: visibleHeight) // 外层容器高度与可见高度完全一致，不再出现高度突变
         .background(
-            Color.clear
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cardCornerRadius))
-                .background(RoundedRectangle(cornerRadius: cardCornerRadius).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
-                .overlay(
-                    RoundedRectangle(cornerRadius: cardCornerRadius)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
+            ZStack {
+                // 1. 实色面板背景 (全屏状态)：淡入显示，完美遮盖下方地图，减少 GPU 压力
+                RoundedRectangle(cornerRadius: cardCornerRadius)
+                    .fill(Theme.sheetBackground)
+                    .opacity(transitionProgress)
+                
+                // 2. 交互式液态玻璃材质 (折叠与半屏状态)：淡出隐藏
+                Color.clear
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cardCornerRadius))
+                    .background(RoundedRectangle(cornerRadius: cardCornerRadius).fill(Color.black.opacity(0.35)))
+                    .opacity(1.0 - transitionProgress)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: cardCornerRadius)
+                    .stroke(Color.white.opacity(0.12 * (1.0 - transitionProgress)), lineWidth: 1)
+            )
         )
         .padding(.bottom, bottomPadding)
     }
@@ -672,6 +745,7 @@ struct VenuesView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
+        .scrollDisabled(drawerState == .collapsed)
     }
 }
 
