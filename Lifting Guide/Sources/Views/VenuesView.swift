@@ -281,57 +281,41 @@ struct VenuesView: View {
         let hHalf = screenHeight * 0.5 - 12
         let hFull = screenHeight - geometry.safeAreaInsets.top // 顶端展开状态：物理高度完全拉满至状态栏下方
         
-        // 是否处于第三级最大化状态
-        let isFull = drawerState == .full
-        
-        // 动态容器高度：全屏或正在拖拽时，高度拉满为 hFull；静态折叠/半屏下，为原版 hHalf (414pt)
-        let useFullHeight = isFull || dragOffset != 0
-        let totalHeight = useFullHeight ? hFull : hHalf
-        
-        // 最大可用内容高度
-        let maxContentHeight = totalHeight - headerHeight - tabBarTotalHeight
-        
-        // 基础偏移量：非全屏静态下，完美还原原版（折叠状态为 maxContentHeight，半屏状态为 0）
+        // 统一在 hFull 坐标系下计算基础偏移量，消除条件分支导致的高度突变
         let baseOffset: CGFloat
-        if useFullHeight {
-            baseOffset = isFull ? 0 : (drawerState == .collapsed ? (hFull - hCollapsed) : (hFull - hHalf))
-        } else {
-            switch drawerState {
-            case .collapsed:
-                baseOffset = maxContentHeight
-            case .half:
-                baseOffset = 0
-            case .full:
-                baseOffset = 0
-            }
+        switch drawerState {
+        case .collapsed:
+            baseOffset = hFull - hCollapsed
+        case .half:
+            baseOffset = hFull - hHalf
+        case .full:
+            baseOffset = 0
         }
         
         let rawOffset = baseOffset + dragOffset
         
         // 动态限制拖拽偏移量：允许手势在拖拽时一路拉到最顶端，向下最多超出 40 点弹性空间
-        let currentOffset = max(-24, min(useFullHeight ? (hFull - hCollapsed + 40) : (maxContentHeight + 40), rawOffset))
+        let currentOffset = max(-24, min(hFull - hCollapsed + 40, rawOffset))
         
         // 计算从半屏到全屏的过渡进度 (0.0 代表半屏或以下，1.0 代表拉满到全屏)
-        let progress = useFullHeight ? (dragOffset != 0 ? max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf)))) : (isFull ? 1.0 : 0.0)) : 0.0
+        let progress = max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf))))
         
         // 动态计算宽度、底部边距、底角圆角半径，以实现从“悬浮卡片”到“全宽铺满屏幕”的平滑跟手缩放
+        let cardCornerRadius: CGFloat = 44
         let drawerWidth = (geometry.size.width - 24) + (24 * progress)
         let bottomPadding = 12 * (1.0 - progress)
-        let bottomCornerRadius = 36 * (1.0 - progress)
+        let bottomCornerRadius = cardCornerRadius * (1.0 - progress * progress * progress)
         
-        // 当 currentOffset 变化时，计算可见高度与淡入淡出透明度
-        let visibleHeight: CGFloat
-        let contentOpacity: Double
-        if useFullHeight {
-            visibleHeight = totalHeight - currentOffset
-            contentOpacity = max(0.0, min(1.0, Double(((hFull - hCollapsed) - currentOffset) / 60.0)))
-        } else {
-            visibleHeight = headerHeight + (maxContentHeight - currentOffset) + tabBarTotalHeight
-            contentOpacity = max(0.0, min(1.0, Double((maxContentHeight - currentOffset) / 60.0)))
-        }
+        // 抽屉实际可见的高度
+        let visibleHeight = hFull - currentOffset
+        // 内容渐变透明度（在折叠状态向上拉起 60pt 内完成淡入）
+        let contentOpacity = max(0.0, min(1.0, Double(((hFull - hCollapsed) - currentOffset) / 60.0)))
+        
+        // 计算安全的内容高度，防止弹性回弹时出现负值
+        let contentHeight = max(0, visibleHeight - headerHeight)
         
         return VStack(spacing: 0) {
-            // A. 头部 (始终可见)
+            // A. 头部 (始终可见，其在容器中的位置天然由容器高度控制，无需使用 offset)
             Group {
                 if selectedVenue != nil {
                     detailHeaderView
@@ -399,11 +383,10 @@ struct VenuesView: View {
                         }
                     }
             )
-            .offset(y: currentOffset) // 头部跟随手势进行位移
             
             // B. 内容与 TabBar 区域 (使用 ZStack 叠层，允许内容滚动到 TabBar 下方并渐变消失)
             ZStack(alignment: .bottom) {
-                // 1. 内容容器 (高度延伸到最底部，覆盖 TabBar 空间)
+                // 1. 内容容器 (高度与父内容容器 contentHeight 同步，ScrollView 内部自适应高度，不再使用 offset 产生滞后)
                 VStack(spacing: 0) {
                     Group {
                         if let venue = selectedVenue {
@@ -477,10 +460,8 @@ struct VenuesView: View {
                             }
                         }
                     }
-                    .frame(height: maxContentHeight + tabBarTotalHeight, alignment: .top)
-                    .offset(y: currentOffset) // 内部布局跟随拖动向下位移
                 }
-                .frame(height: maxContentHeight + tabBarTotalHeight, alignment: .top) // 外层静态高度容器 (延伸到最底)
+                .frame(height: contentHeight, alignment: .top) // 高度与内容显示区一致，不再使用固定最大高度和 offset
                 .mask(
                     VStack(spacing: 0) {
                         // 1. 顶部完全不透明区域
@@ -508,25 +489,26 @@ struct VenuesView: View {
                     .frame(height: tabBarTotalHeight)
                     .allowsHitTesting(false)
             }
+            .frame(height: contentHeight)
         }
         .frame(width: drawerWidth)
-        .frame(height: totalHeight) // 固定整个容器物理高度，避免影响 Spacer 和父容器的排版
+        .frame(height: visibleHeight) // 外层容器高度与可见高度完全一致，不再出现高度突变
         .background(
             Group {
                 if progress == 0 {
                     Color.clear
-                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 36))
-                        .background(RoundedRectangle(cornerRadius: 36).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
+                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cardCornerRadius))
+                        .background(RoundedRectangle(cornerRadius: cardCornerRadius).fill(Color.black.opacity(0.35))) // 增加半透明黑，以增强暗色玻璃深度
                         .overlay(
-                            RoundedRectangle(cornerRadius: 36)
+                            RoundedRectangle(cornerRadius: cardCornerRadius)
                                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
                         )
                 } else {
                     let transitionShape = UnevenRoundedRectangle(
-                        topLeadingRadius: 36,
+                        topLeadingRadius: cardCornerRadius,
                         bottomLeadingRadius: bottomCornerRadius,
                         bottomTrailingRadius: bottomCornerRadius,
-                        topTrailingRadius: 36
+                        topTrailingRadius: cardCornerRadius
                     )
                     Color.clear
                         .glassEffect(.regular.interactive(), in: transitionShape)
@@ -537,8 +519,6 @@ struct VenuesView: View {
                         )
                 }
             }
-            .frame(height: visibleHeight)
-            , alignment: .bottom // 玻璃背景以底部对齐，使其在折叠时也完美保持底角圆角，不会截断或穿过底部
         )
         .padding(.bottom, bottomPadding)
     }
