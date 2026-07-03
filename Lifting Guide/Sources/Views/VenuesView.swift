@@ -302,9 +302,12 @@ struct VenuesView: View {
         
         // 动态计算宽度、底部边距、底角圆角半径，以实现从“悬浮卡片”到“全宽铺满屏幕”的平滑跟手缩放
         let cardCornerRadius: CGFloat = 44
-        let drawerWidth = (geometry.size.width - 26) + (26 * progress)
-        let bottomPadding = 13 * (1.0 - progress)
-        let bottomCornerRadius = cardCornerRadius * (1.0 - progress * progress * progress * progress * progress)
+        let drawerWidth = (geometry.size.width - 28) + (28 * progress)
+        let bottomPadding = 14 * (1.0 - progress)
+        let p2 = progress * progress
+        let p4 = p2 * p2
+        let p8 = p4 * p4
+        let bottomCornerRadius = cardCornerRadius * (1.0 - p8)
         
         // 抽屉实际可见的高度
         let visibleHeight = hFull - currentOffset
