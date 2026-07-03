@@ -340,6 +340,34 @@ struct VenuesView: View {
                                 Divider()
                                     .background(Color.white.opacity(0.1))
                                 
+                                if let locError = viewModel.locationError {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "location.slash.fill")
+                                            .foregroundColor(.orange)
+                                            .font(.system(size: 14))
+                                        Text("定位失败：\(locError.localizedDescription)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(Theme.textStrong)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Button(action: {
+                                            viewModel.retryLocation()
+                                        }) {
+                                            Text("重试")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundColor(Theme.brandPrimary)
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 4)
+                                                .background(Capsule().stroke(Theme.brandPrimary, lineWidth: 1))
+                                        }
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.15)))
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 8)
+                                }
+                                
                                 if viewModel.isLoading {
                                     ProgressView("正在加载场馆数据...")
                                         .progressViewStyle(CircularProgressViewStyle(tint: Theme.brandPrimary))

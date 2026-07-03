@@ -13,6 +13,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var currentProvince: String?
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var isLocating = false
+    @Published var lastError: Error?
     
     override init() {
         super.init()
@@ -47,6 +48,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     func startUpdatingLocation() {
         print("📍 [LocationManager] 开始单次定位更新...")
         isLocating = true
+        lastError = nil
         manager.startUpdatingLocation()
         if CLLocationManager.headingAvailable() {
             print("📍 [LocationManager] 设备支持朝向，开始更新朝向")
@@ -91,6 +93,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.geocoder.reverseGeocodeLocation(location, preferredLocale: Locale(identifier: "zh_CN")) { placemarks, error in
                 if let error = error {
                     print("📍 [LocationManager] 逆地理编码失败: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.lastError = error
+                    }
                     return
                 }
                 
@@ -117,6 +122,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         print("📍 [LocationManager] 定位请求失败: \(error.localizedDescription)")
         DispatchQueue.main.async {
             self.isLocating = false
+            self.lastError = error
         }
     }
     

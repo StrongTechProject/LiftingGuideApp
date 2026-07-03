@@ -45,6 +45,9 @@ class VenuesViewModel: ObservableObject {
     /// 错误信息
     @Published var errorMessage: String?
     
+    /// 定位失败错误
+    @Published var locationError: Error?
+    
     // MARK: - 内部依赖
     
     private let locationManager = LocationManager()
@@ -57,6 +60,12 @@ class VenuesViewModel: ObservableObject {
     /// 开始初始化加载数据与请求定位
     func initialize() {
         loadLocalFallbackData()
+        locationManager.requestLocationPermission()
+    }
+    
+    /// 重试定位更新
+    func retryLocation() {
+        self.locationError = nil
         locationManager.requestLocationPermission()
     }
     
@@ -86,6 +95,15 @@ class VenuesViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+            
+        // 监听定位错误更新
+        locationManager.$lastError
+            .receive(on: RunLoop.main)
+            .sink { [weak self] error in
+                guard let self = self else { return }
+                self.locationError = error
+            }
+            .store(in: &cancellables)
     }
     
     /// 从本地 Fallback JSON 加载场馆数据
@@ -107,7 +125,7 @@ class VenuesViewModel: ObservableObject {
                 let decodedVenues = try JSONDecoder().decode([Venue].self, from: data)
                 
                 // 构建省市字典地图供筛选下拉框使用
-                let map = self.buildProvinceMap(decodedVenues)
+                let map = Self.buildProvinceMap(decodedVenues)
                 
                 DispatchQueue.main.async {
                     self.allVenues = decodedVenues
@@ -151,7 +169,7 @@ class VenuesViewModel: ObservableObject {
     
     // MARK: - 省市归类地图逻辑 (从 filters.js 中的 buildProvinceMap 移植)
     
-    private func buildProvinceMap(_ venues: [Venue]) -> [String: [String]] {
+    private static func buildProvinceMap(_ venues: [Venue]) -> [String: [String]] {
         var map: [String: Set<String>] = [:]
         for v in venues {
             guard !v.province.isEmpty, !v.city.isEmpty else { continue }
