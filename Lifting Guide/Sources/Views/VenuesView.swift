@@ -312,7 +312,7 @@ struct VenuesView: View {
         let currentOffset = max(-24, min(useFullHeight ? (hFull - hCollapsed + 40) : (maxContentHeight + 40), rawOffset))
         
         // 计算从半屏到全屏的过渡进度 (0.0 代表半屏或以下，1.0 代表拉满到全屏)
-        let progress = useFullHeight ? (isFull ? 1.0 : max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf))))) : 0.0
+        let progress = useFullHeight ? (dragOffset != 0 ? max(0.0, min(1.0, 1.0 - (currentOffset / (hFull - hHalf)))) : (isFull ? 1.0 : 0.0)) : 0.0
         
         // 动态计算宽度、底部边距、底角圆角半径，以实现从“悬浮卡片”到“全宽铺满屏幕”的平滑跟手缩放
         let drawerWidth = (geometry.size.width - 24) + (24 * progress)
